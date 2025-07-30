@@ -780,75 +780,77 @@
                 if (t.currentRound === 1) {
                     playerToGetBye = eligibleForBye[Math.floor(Math.random() * eligibleForBye.length)];
                 } else {
-                    const minScore = Math.min(...eligibleForBye.map(p => p.score));
-                    const lowestScoreByeCandidates = eligibleForBye.filter(p => p.score === minScore);
-                    playerToGetBye = lowestScoreByeCandidates[Math.floor(Math.random() * lowestScoreByeCandidates.length)];
+                    eligibleForBye.sort((a, b) => (a.score - b.score) || ((a.rating || 0) - (b.rating || 0)));
+                    playerToGetBye = eligibleForBye[0];
                 }
                 
                 byePlayerId = playerToGetBye.id;
                 const originalByePlayer = getParticipantById(byePlayerId);
-                originalByePlayer.hadBye = true;
-                originalByePlayer.results.push(1);
-                originalByePlayer.opponents.push('bye');
-                originalByePlayer.colors.push('none');
+                if (originalByePlayer) {
+                    originalByePlayer.hadBye = true;
+                    originalByePlayer.results.push(1);
+                    originalByePlayer.opponents.push('bye');
+                    originalByePlayer.colors.push('none');
+                }
                 playersToPair = playersToPair.filter(p => p.id !== byePlayerId);
             }
 
-            const scoreGroups = playersToPair.reduce((groups, player) => {
-                groups[player.score] = groups[player.score] || [];
-                groups[player.score].push(player);
-                return groups;
-            }, {});
+            const findPairingsRecursive = (players) => {
+                if (players.length === 0) {
+                    return [];
+                }
 
-            const sortedScores = Object.keys(scoreGroups).sort((a, b) => b - a);
-            const pairs = [];
-            let unpaired = [];
+                players.sort((a, b) => (b.score - a.score) || ((b.rating || 0) - (a.rating || 0)));
+                
+                const p1 = players[0];
+                const rest = players.slice(1);
 
-            for (const score of sortedScores) {
-                let playersInGroup = scoreGroups[score];
-                playersInGroup = [...unpaired, ...playersInGroup];
-                unpaired = [];
+                for (let i = 0; i < rest.length; i++) {
+                    const p2 = rest[i];
 
-                playersInGroup.sort((a, b) => (b.rating || 0) - (a.rating || 0));
-
-                while (playersInGroup.length > 0) {
-                    if (playersInGroup.length === 1) {
-                        unpaired.push(playersInGroup.shift());
-                        break;
+                    if (p1.opponents.includes(p2.id)) {
+                        continue;
                     }
-                    const player1 = playersInGroup.shift();
-                    let foundPair = false;
-                    for (let i = 0; i < playersInGroup.length; i++) {
-                        const player2 = playersInGroup[i];
-                        if (!player1.opponents.includes(player2.id)) {
-                            const p1Original = getParticipantById(player1.id);
-                            const p2Original = getParticipantById(player2.id);
-                            
-                            const p1ColorPref = p1Original.colors.filter(c=>c==='w').length - p1Original.colors.filter(c=>c==='b').length;
-                            const p2ColorPref = p2Original.colors.filter(c=>c==='w').length - p2Original.colors.filter(c=>c==='b').length;
-                            
-                            let p1Color = 'w';
-                            if (p1ColorPref > p2ColorPref) p1Color = 'b';
-                            else if (p2ColorPref > p1ColorPref) p1Color = 'w';
-                            else p1Color = Math.random() < 0.5 ? 'w' : 'b';
 
-                            pairs.push({ player1: player1.id, player2: player2.id, result: '-', p1Color });
-                            playersInGroup.splice(i, 1);
-                            foundPair = true;
-                            break;
+                    const remainingPlayers = rest.filter((_, index) => index !== i);
+                    const subsequentPairs = findPairingsRecursive(remainingPlayers);
+
+                    if (subsequentPairs !== null) {
+                        const p1Original = getParticipantById(p1.id);
+                        const p2Original = getParticipantById(p2.id);
+                        
+                        const p1ColorPref = p1Original.colors.filter(c => c === 'w').length - p1Original.colors.filter(c => c === 'b').length;
+                        const p2ColorPref = p2Original.colors.filter(c => c === 'w').length - p2Original.colors.filter(c => c === 'b').length;
+                        
+                        let p1Color = 'w';
+                        if (p1ColorPref > p2ColorPref) {
+                            p1Color = 'b';
+                        } else if (p2ColorPref > p1ColorPref) {
+                            p1Color = 'w';
+                        } else {
+                            if ((p1Original.rating || 0) > (p2Original.rating || 0)) {
+                                p1Color = 'w';
+                            } else {
+                                p1Color = Math.random() < 0.5 ? 'w' : 'b';
+                            }
                         }
-                    }
-                    if (!foundPair) {
-                        unpaired.push(player1);
+
+                        const currentPair = { player1: p1.id, player2: p2.id, result: '-', p1Color };
+                        return [currentPair, ...subsequentPairs];
                     }
                 }
-            }
-            
-            if(unpaired.length > 0) {
-                 console.error("CRITICAL: Could not pair all players.", unpaired);
+                return null;
+            };
+
+            const finalPairs = findPairingsRecursive(playersToPair);
+
+            if (finalPairs === null) {
+                console.error("CRITICAL: Could not create a valid pairing for all players.");
+                showAlertModal('Ошибка жеребьевки', 'Не удалось создать пары без повторных встреч. Проверьте историю партий.');
+                return { pairs: [], bye: byePlayerId, completed: false };
             }
 
-            return { pairs: pairs, bye: byePlayerId, completed: false };
+            return { pairs: finalPairs, bye: byePlayerId, completed: false };
         }
         
         const completeCurrentRound = () => {
